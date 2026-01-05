@@ -1,2 +1,9 @@
 # scrabblehelper
-A bot to help you know what your opponent has in their hand.
+A scrabble utility bot.
+
+Current functions:
+- Allows the user to know their opponents hand
+
+Roadmap:
+- Usable for multiplayer
+- Word recommendations
