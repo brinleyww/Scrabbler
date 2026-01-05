@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 
 class ScrabbleGame:
     def __init__(self, root):
@@ -11,13 +11,15 @@ class ScrabbleGame:
         self.letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         self.start_count = 10
         self.game_active = False
-        self.current_turn = None # "user" or "opponent"
-        self.draw_phase = False # If True, clicks on bag add to hand
+        self.current_turn = None  # "user" or "opponent"
+        self.draw_phase = False   # If True, clicks on bag add to hand
         self.temp_drawn_tiles = [] # Stores tiles drawn during the draw phase
         
         # Data storage
         self.tile_data = {} 
+        # User hand: empty strings mean empty slots
         self.user_hand = ["", "", "", "", "", "", ""]
+        # Opponent hand: ? means unknown tile
         self.opp_hand = ["?", "?", "?", "?", "?", "?", "?"]
 
         # --- UI LAYOUT ---
@@ -34,8 +36,8 @@ class ScrabbleGame:
                                    bg="#d9534f", fg="white", font=("Arial", 12, "bold"))
         self.btn_reset.pack(side="right", padx=5)
 
-        # Status Label (Important for instructions)
-        self.lbl_status = tk.Label(root, text="Setup Phase: Set your hand and adjust bag if needed.", 
+        # Status Label
+        self.lbl_status = tk.Label(root, text="Setup Phase: Left-click to remove, Right-click to add.", 
                                    font=("Arial", 14), bg="#333333", fg="#4a90e2")
         self.lbl_status.pack(pady=5)
 
@@ -47,16 +49,16 @@ class ScrabbleGame:
         # Separator
         ttk.Separator(root, orient='horizontal').pack(fill='x', pady=10)
 
-        # 3. Action Area (Inputting words / Proceeding)
+        # 3. Action Area
         self.action_frame = tk.Frame(root, bg="#444444", bd=2, relief="groove")
         self.action_frame.pack(fill="x", padx=20, pady=5)
         
-        # Widgets for playing a word (Hidden initially)
+        # Play Word Widgets
         self.lbl_action = tk.Label(self.action_frame, text="Enter Word Played:", bg="#444444", fg="white", font=("Arial", 12))
         self.entry_word = tk.Entry(self.action_frame, font=("Arial", 12))
         self.btn_play_word = tk.Button(self.action_frame, text="Submit Play", command=self.submit_play, bg="#F0AD4E")
         
-        # Widgets for proceeding (Hidden initially)
+        # Proceed Widget
         self.btn_proceed = tk.Button(self.action_frame, text="Finish Drawing & Proceed", command=self.proceed_turn, bg="#5bc0de")
 
         # 4. Hands Area
@@ -83,7 +85,7 @@ class ScrabbleGame:
 
     # --- UI BUILDING BLOCKS ---
 
-    def create_tile_widget(self, parent, letter, count=None, size_scale=1.0, click_callback=None):
+    def create_tile_widget(self, parent, letter, count=None, size_scale=1.0, left_click_cb=None, right_click_cb=None):
         w = int(50 * size_scale)
         h = int(60 * size_scale)
         font_sz = int(18 * size_scale)
@@ -101,11 +103,18 @@ class ScrabbleGame:
             lbl_count.pack(side="bottom")
 
         # Bind events
-        if click_callback:
-            def on_click(e): click_callback()
-            frame.bind("<Button-1>", on_click)
-            lbl_letter.bind("<Button-1>", on_click)
-            if lbl_count: lbl_count.bind("<Button-1>", on_click)
+        # Button-1 is Left Click, Button-3 is Right Click
+        if left_click_cb:
+            def on_left(e): left_click_cb()
+            frame.bind("<Button-1>", on_left)
+            lbl_letter.bind("<Button-1>", on_left)
+            if lbl_count: lbl_count.bind("<Button-1>", on_left)
+            
+        if right_click_cb:
+            def on_right(e): right_click_cb()
+            frame.bind("<Button-3>", on_right)
+            lbl_letter.bind("<Button-3>", on_right)
+            if lbl_count: lbl_count.bind("<Button-3>", on_right)
 
         return frame, lbl_letter, lbl_count
 
@@ -118,47 +127,81 @@ class ScrabbleGame:
             
             f, l_lbl, c_lbl = self.create_tile_widget(
                 container, letter, count=self.start_count, size_scale=0.8,
-                click_callback=lambda x=letter: self.handle_bag_click(x)
+                left_click_cb=lambda x=letter: self.handle_bag_click(x, is_right=False),
+                right_click_cb=lambda x=letter: self.handle_bag_click(x, is_right=True)
             )
             f.pack()
             self.tile_data[letter] = {"count": self.start_count, "frame": f, "cnt_lbl": c_lbl, "let_lbl": l_lbl}
 
     # --- LOGIC HANDLERS ---
 
-    def handle_bag_click(self, letter):
+    def handle_bag_click(self, letter, is_right):
         """ Handles clicking a tile in the main bag grid """
         data = self.tile_data[letter]
         
-        # Logic 1: Setup Phase (Simple decrement)
+        # --- RIGHT CLICK (ADD/UNDO) ---
+        if is_right:
+            # If in draw phase and we are right clicking a letter we just drew, treat it as Undo
+            if self.draw_phase and letter in self.temp_drawn_tiles:
+                self.temp_drawn_tiles.remove(letter)
+                data["count"] += 1
+                self.update_tile_visual(letter)
+                self.update_draw_status_label()
+                return
+
+            # Otherwise, just general increment (correcting bag count)
+            # You can always fix the bag counts, even if locked, via right click 
+            # (User might realize they miscounted earlier)
+            data["count"] += 1
+            self.update_tile_visual(letter)
+            return
+
+        # --- LEFT CLICK (SUBTRACT/DRAW) ---
+        
+        # 1. Setup Phase
         if not self.game_active:
             if data["count"] > 0:
                 data["count"] -= 1
                 self.update_tile_visual(letter)
             return
 
-        # Logic 2: Play Phase (Bag is Locked)
+        # 2. Locked Phase (Waiting for word submission)
         if not self.draw_phase:
-            messagebox.showinfo("Locked", "The bag is locked until you submit a played word.")
+            messagebox.showinfo("Locked", "The bag is locked until you submit a played word.\n(Right-click works to fix errors).")
             return
 
-        # Logic 3: Draw Phase (Refill hand)
-        if self.draw_phase and data["count"] > 0:
-            data["count"] -= 1
-            self.update_tile_visual(letter)
-            self.temp_drawn_tiles.append(letter)
-            # Update status to show what was drawn
-            self.lbl_status.config(text=f"Drawing: {', '.join(self.temp_drawn_tiles)}")
+        # 3. Draw Phase
+        if self.draw_phase:
+            # CHECK VALIDATION: Do we need more tiles?
+            current_hand_list = self.user_hand if self.current_turn == "user" else self.opp_hand
+            current_count = len(current_hand_list)
+            needed = 7 - current_count
+            
+            if len(self.temp_drawn_tiles) >= needed:
+                messagebox.showerror("Limit Reached", f"The current hand already has enough tiles ({current_count + len(self.temp_drawn_tiles)}/7).\nYou cannot draw more.")
+                return
+
+            if data["count"] > 0:
+                data["count"] -= 1
+                self.update_tile_visual(letter)
+                self.temp_drawn_tiles.append(letter)
+                self.update_draw_status_label()
+
+    def update_draw_status_label(self):
+        txt = "Drawing: " + ", ".join(self.temp_drawn_tiles)
+        self.lbl_status.config(text=txt)
 
     def update_tile_visual(self, letter):
         data = self.tile_data[letter]
         data["cnt_lbl"].config(text=str(data["count"]))
+        
+        # Visual styling based on count
         if data["count"] == 0:
             gray = "#999999"
             data["frame"].config(bg=gray, relief="sunken")
             data["let_lbl"].config(bg=gray, fg="#666666")
             data["cnt_lbl"].config(bg=gray, fg="#666666")
         else:
-            # ensure it looks active
             wood = "#F5DEB3"
             data["frame"].config(bg=wood, relief="raised")
             data["let_lbl"].config(bg=wood, fg="black")
@@ -167,9 +210,16 @@ class ScrabbleGame:
     # --- GAME FLOW ---
 
     def start_game_sequence(self):
+        # VALIDATION: Check if hand is full
+        empty_slots = self.user_hand.count("")
+        if empty_slots > 0:
+            msg = f"Your hand has {empty_slots} empty slots. Usually you start with 7 letters.\nAre you sure you want to start?"
+            if not messagebox.askyesno("Confirm Hand", msg):
+                return
+
         # 1. Hide Start Button
         self.btn_start.pack_forget()
-        self.btn_set_hand.config(state="disabled") # Lock manual hand editing
+        self.btn_set_hand.config(state="disabled") 
         self.game_active = True
 
         # 2. Select Who Starts
@@ -191,7 +241,7 @@ class ScrabbleGame:
         """ Sets up the UI for the start of a turn """
         self.draw_phase = False
         self.temp_drawn_tiles = []
-        self.dim_bag(True) # Visual lock of bag
+        self.dim_bag(True) 
 
         # Show input fields
         self.btn_proceed.pack_forget()
@@ -213,34 +263,45 @@ class ScrabbleGame:
             messagebox.showerror("Error", "Please enter a word.")
             return
 
-        # Remove letters from hand
+        # VALIDATION: Check if user/opponent actually has the letters
         if self.current_turn == "user":
-            # Check if user has letters
             temp_hand = self.user_hand.copy()
-            possible = True
-            for char in word:
-                if char in temp_hand:
-                    temp_hand.remove(char)
-                elif "" in temp_hand: # Blank used (represented as empty string in my logic, usually)
-                    temp_hand.remove("") 
-                else:
-                    # Logic note: Standard Scrabble has blanks. 
-                    # If letter not found, we assume a blank or error. 
-                    # For this simple app, we will just warn but allow forcing.
-                    pass
+            # Filter out empty slots for checking
+            active_hand = [x for x in temp_hand if x != ""]
             
-            self.user_hand = temp_hand
+            # Check availability
+            missing = []
+            for char in word:
+                if char in active_hand:
+                    active_hand.remove(char)
+                else:
+                    missing.append(char)
+            
+            if missing:
+                # We allow override just in case of blanks or manual error, but we warn heavily
+                msg = f"You do not have the letter(s): {', '.join(missing)} in your hand.\nDid you use a blank tile?"
+                if not messagebox.askyesno("Invalid Letters?", msg):
+                    return
 
-        else: # Opponent
-            # Remove letters. If letter exists, remove it. If not, remove a '?'
+            # Apply removal
+            for char in word:
+                if char in self.user_hand:
+                    self.user_hand.remove(char)
+                elif "" in self.user_hand:
+                    # Remove an empty slot if we think it's a blank tile usage? 
+                    # Simpler: just don't remove anything if not found, rely on user to be accurate
+                    pass
+        
+        else: # Opponent Logic
+            # Just remove letters. Priority: Actual Letter -> Question Mark
             for char in word:
                 if char in self.opp_hand:
                     self.opp_hand.remove(char)
                 elif "?" in self.opp_hand:
                     self.opp_hand.remove("?")
                 else:
-                    # Hand empty or ran out of tiles
-                    pass
+                    messagebox.showwarning("Logic Error", "Opponent played more tiles than they have in their hand!")
+                    return
 
         self.refresh_hands_ui()
         self.start_draw_phase()
@@ -253,17 +314,29 @@ class ScrabbleGame:
         self.lbl_action.pack_forget()
         self.entry_word.pack_forget()
         self.btn_play_word.pack_forget()
-        
         self.btn_proceed.pack(pady=5)
         
         self.dim_bag(False) # Unlock bag visually
         
-        txt = "Update the Bag: Click the letters that "
+        txt = "Update the Bag: Click letters "
         txt += "YOU drew." if self.current_turn == "user" else "THEY drew."
         self.lbl_status.config(text=txt, fg="#e67e22")
 
     def proceed_turn(self):
         """ Finalize draw and switch turns """
+        
+        # VALIDATION: Did they draw enough?
+        hand_list = self.user_hand if self.current_turn == "user" else self.opp_hand
+        current_total = len(hand_list) + len(self.temp_drawn_tiles)
+        
+        # Note: In late game, bag might be empty, so < 7 is allowed.
+        # But if bag has tiles and hand < 7, warn them.
+        bag_has_tiles = any(d["count"] > 0 for d in self.tile_data.values())
+        
+        if current_total < 7 and bag_has_tiles:
+            if not messagebox.askyesno("Incomplete Hand", f"Hand only has {current_total} tiles. Proceed anyway?"):
+                return
+
         # Add temp tiles to current player's hand
         if self.current_turn == "user":
             self.user_hand.extend(self.temp_drawn_tiles)
@@ -273,20 +346,14 @@ class ScrabbleGame:
         self.refresh_hands_ui()
         
         # Switch Turn
-        if self.current_turn == "user":
-            self.current_turn = "opponent"
-        else:
-            self.current_turn = "user"
-            
+        self.current_turn = "opponent" if self.current_turn == "user" else "user"
         self.initiate_turn()
 
     # --- UTILS ---
 
     def dim_bag(self, dim):
-        # Visual effect to show if bag is active or not
         bg_color = "#222222" if dim else "#333333"
         self.pool_frame.config(bg=bg_color)
-        # We don't actually disable the widgets, we just handle logic in the click handler
 
     def refresh_hands_ui(self):
         # Clear
@@ -295,7 +362,7 @@ class ScrabbleGame:
 
         # User
         for char in self.user_hand:
-            display = char if char else " " # Handle empty string as blank
+            display = char if char else " " 
             cont = tk.Frame(self.user_tiles_vis, bg="#2b2b2b")
             cont.pack(side="left", padx=2)
             f, _, _ = self.create_tile_widget(cont, display, size_scale=0.7)
@@ -358,7 +425,7 @@ class ScrabbleGame:
         self.entry_word.pack_forget()
         self.btn_play_word.pack_forget()
         self.btn_proceed.pack_forget()
-        self.lbl_status.config(text="Setup Phase: Set your hand and adjust bag if needed.", fg="#4a90e2")
+        self.lbl_status.config(text="Setup Phase: Left-click to remove, Right-click to add.", fg="#4a90e2")
         self.refresh_hands_ui()
         self.dim_bag(False)
 
